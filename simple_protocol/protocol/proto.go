@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 
 	"github.com/panjf2000/gnet/v2"
 )
@@ -49,11 +50,14 @@ func (codec SimpleCodec) Encode(buf []byte) ([]byte, error) {
 	return data, nil
 }
 
-func (codec *SimpleCodec) Decode(c gnet.Conn) ([]byte, error) {
+func (codec SimpleCodec) Decode(c gnet.Conn) ([]byte, error) {
 	bodyOffset := magicNumberSize + bodySize
-	buf, _ := c.Peek(bodyOffset)
-	if len(buf) < bodyOffset {
-		return nil, ErrIncompletePacket
+	buf, err := c.Peek(bodyOffset)
+	if err != nil {
+		if errors.Is(err, io.ErrShortBuffer) {
+			err = ErrIncompletePacket
+		}
+		return nil, err
 	}
 
 	if !bytes.Equal(magicNumberBytes, buf[:magicNumberSize]) {
@@ -62,13 +66,18 @@ func (codec *SimpleCodec) Decode(c gnet.Conn) ([]byte, error) {
 
 	bodyLen := binary.BigEndian.Uint32(buf[magicNumberSize:bodyOffset])
 	msgLen := bodyOffset + int(bodyLen)
-	if c.InboundBuffered() < msgLen {
-		return nil, ErrIncompletePacket
+	buf, err = c.Peek(msgLen)
+	if err != nil {
+		if errors.Is(err, io.ErrShortBuffer) {
+			err = ErrIncompletePacket
+		}
+		return nil, err
 	}
-	buf, _ = c.Peek(msgLen)
+	body := make([]byte, bodyLen)
+	copy(body, buf[bodyOffset:msgLen])
 	_, _ = c.Discard(msgLen)
 
-	return buf[bodyOffset:msgLen], nil
+	return body, nil
 }
 
 func (codec SimpleCodec) Unpack(buf []byte) ([]byte, error) {
